@@ -96,7 +96,33 @@ def pick_voice():
     return names[0] if names else None
 
 
-SAY_VOICE = pick_voice()
+IS_WINDOWS = sys.platform == "win32"
+
+# Windows : voix intégrées (SAPI) via PowerShell, sans dépendance à installer.
+# Le texte passe par l'entrée standard pour éviter tout souci de guillemets ou d'accents.
+WIN_TTS = r'''
+[Console]::InputEncoding = [Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$wanted = $env:JARVIS_VOICE
+$fr = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'fr-*' }
+$pick = $fr | Where-Object { $wanted -and $_.VoiceInfo.Name -like "*$wanted*" } | Select-Object -First 1
+if (-not $pick) { $pick = $fr | Select-Object -First 1 }
+if ($pick) { $s.SelectVoice($pick.VoiceInfo.Name) }
+$s.Rate = [int]$env:JARVIS_SAPI_RATE
+$s.Speak([Console]::In.ReadToEnd())
+'''
+
+
+def _sapi_rate():
+    # SAPI va de -10 à 10 ; 0 correspond à environ 170 mots par minute
+    try:
+        return str(max(-10, min(10, round((int(SPEECH_RATE) - 170) / 15))))
+    except ValueError:
+        return "0"
+
+
+SAY_VOICE = None if IS_WINDOWS else pick_voice()
 
 
 def speak(text):
@@ -106,6 +132,12 @@ def speak(text):
     if not text:
         return
     print(f"\n  JARVIS : {text}\n", flush=True)
+    if IS_WINDOWS:
+        env = dict(os.environ, JARVIS_SAPI_RATE=_sapi_rate())
+        script = base64.b64encode(WIN_TTS.encode("utf-16-le")).decode()  # script multiligne sans souci d'échappement
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", script],
+                       input=text.encode("utf-8"), env=env, creationflags=0x08000000)  # sans fenêtre
+        return
     cmd = ["say", "-r", SPEECH_RATE]
     if SAY_VOICE:
         cmd += ["-v", SAY_VOICE]
