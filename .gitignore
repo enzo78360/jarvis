@@ -1,0 +1,13 @@
+# Secrets : ne jamais publier
+credentials.json
+token.json
+.env
+
+# Généré ou téléchargé par lancer.command
+.venv/
+modeles/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
