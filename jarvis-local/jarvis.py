@@ -56,7 +56,10 @@ VOICE = os.environ.get("JARVIS_VOICE", "")
 SPEECH_RATE = os.environ.get("JARVIS_VITESSE", "165")  # mots par minute
 CLAP_SENSITIVITY = float(os.environ.get("JARVIS_CLAP_SENSIBILITE", "1.0"))
 WAKE_WORD_ON = os.environ.get("JARVIS_MOT_CLE", "1") != "0"
-WAKE_MODEL = HERE / "modeles" / "vosk-model-small-fr-0.22"
+# Mac : « modeles.nosync », qu'iCloud ne synchronise pas ; Windows : « modeles »
+WAKE_MODEL = next((HERE / d / "vosk-model-small-fr-0.22" for d in ("modeles.nosync", "modeles")
+                   if (HERE / d / "vosk-model-small-fr-0.22").exists()),
+                  HERE / "modeles" / "vosk-model-small-fr-0.22")
 RATE = 16000
 BLOCK = 512  # 32 ms
 SCOPES = [

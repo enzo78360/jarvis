@@ -5,9 +5,14 @@ token.json
 
 # Généré ou téléchargé par lancer.command
 .venv/
+.venv.nosync/
 modeles/
+modeles.nosync/
 __pycache__/
 *.pyc
 
 # macOS
 .DS_Store
+
+# État des outils de développement
+.omc/

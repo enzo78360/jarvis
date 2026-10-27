@@ -23,25 +23,30 @@ if ! "$OLLAMA" show "$MODEL" >/dev/null 2>&1; then
   "$OLLAMA" pull "$MODEL" || { read -r -p "Le téléchargement a échoué. Appuyez sur Entrée pour fermer."; exit 1; }
 fi
 
-if [ ! -d .venv ]; then
+# Dossiers en « .nosync » : iCloud ne les synchronise pas et ne peut donc pas les vider
+# (avec « Optimiser le stockage », les fichiers devenaient des raccourcis et Jarvis restait bloqué)
+VENV=.venv.nosync
+MODELES=modeles.nosync
+
+if [ ! -d "$VENV" ]; then
   echo "Première installation, ça prend une minute…"
-  python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q -r requirements.txt || {
+  python3 -m venv "$VENV" && "$VENV/bin/pip" install -q --upgrade pip && "$VENV/bin/pip" install -q -r requirements.txt || {
     read -r -p "L'installation a échoué. Appuyez sur Entrée pour fermer."
     exit 1
   }
 fi
 
 # Mises à jour : nouvelles dépendances et modèle du mot « Jarvis » (40 Mo, hors ligne)
-.venv/bin/python -W ignore -c "import vosk, ollama" 2>/dev/null || .venv/bin/pip install -q -r requirements.txt
-WAKE=modeles/vosk-model-small-fr-0.22
+"$VENV/bin/python" -W ignore -c "import vosk, ollama" 2>/dev/null || "$VENV/bin/pip" install -q -r requirements.txt
+WAKE=$MODELES/vosk-model-small-fr-0.22
 if [ ! -d "$WAKE" ]; then
   echo "Téléchargement du modèle pour le mot « Jarvis » (40 Mo, une seule fois)…"
-  mkdir -p modeles && curl -fsSL -o modeles/fr.zip https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip \
-    && unzip -q -o modeles/fr.zip -d modeles && rm modeles/fr.zip \
+  mkdir -p "$MODELES" && curl -fsSL -o "$MODELES/fr.zip" https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip \
+    && unzip -q -o "$MODELES/fr.zip" -d "$MODELES" && rm "$MODELES/fr.zip" \
     || echo "Échec : Jarvis démarrera sans le mot-clé (claps et Entrée restent actifs)."
 fi
 
-.venv/bin/python jarvis.py
+"$VENV/bin/python" jarvis.py
 
 # Jarvis fermé (Ctrl+C) : on éteint aussi Ollama pour libérer la mémoire
 "$(dirname "$0")/arreter-jarvis.command"
