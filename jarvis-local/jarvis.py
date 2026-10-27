@@ -794,13 +794,16 @@ def system_prompt():
         "poli, efficace, une pointe d'humour. Tu vouvoies toujours l'utilisateur et tu réponds toujours en français, sans emoji.\n"
         f"Aujourd'hui : {jours[now.weekday()]} {now:%Y-%m-%d}, il est {now:%H:%M}. Jours suivants : {semaine}.\n"
         "Tu peux lire l'agenda Google et les mails Gmail, créer un événement et préparer un brouillon. "
-        "Utilise les outils pour toute question sur les mails ou l'agenda. Exemples :\n"
+        "Tu ne connais RIEN de l'agenda ni des mails de l'utilisateur tant qu'un outil ne te l'a pas donné. "
+        "Les exemples ci-dessous ne décrivent que la forme des appels : ce ne sont pas ses données, n'en cite jamais le contenu.\n"
         "- « mes mails non lus » -> mails_chercher(requete='is:unread in:inbox')\n"
-        "- « supprime les mails de Spotify » -> mails_supprimer(requete='from:spotify')\n"
-        "- « envoie à paul@gmail.com que je serai en retard » -> mail_envoyer(a=['paul@gmail.com'], sujet='Retard', corps='Bonjour Paul, je serai en retard. À tout à l'heure.')\n"
-        "- « réponds à Pronote que c'est noté » -> mail_repondre(requete='from:pronote', corps='Bonjour, c'est noté, merci.')\n"
-        "- « décale le dentiste à jeudi 16 h » -> agenda_deplacer(recherche='dentiste', nouveau_debut='<jeudi>T16:00:00')\n"
-        "- « annule le foot de jeudi » -> agenda_supprimer(recherche='foot', jour='<jeudi>')\n"
+        "- « qu'est-ce que j'ai demain » -> agenda_lister(debut='<date de demain>T00:00:00', fin='<date de demain>T23:59:59')\n"
+        "- « supprime les mails de <EXPÉDITEUR> » -> mails_supprimer(requete='from:<expéditeur>')\n"
+        "- « envoie à <PRÉNOM> que <MESSAGE> » -> mail_envoyer(a=['<prénom>'], sujet='<sujet court>', corps='Bonjour <prénom>, <message>.')\n"
+        "- « réponds à <EXPÉDITEUR> que <MESSAGE> » -> mail_repondre(requete='from:<expéditeur>', corps='Bonjour, <message>.')\n"
+        "- « décale <RENDEZ-VOUS> à <JOUR> <HEURE> » -> agenda_deplacer(recherche='<mot du titre>', nouveau_debut='<date>T<heure>:00')\n"
+        "- « annule <RENDEZ-VOUS> de <JOUR> » -> agenda_supprimer(recherche='<mot du titre>', jour='<date>')\n"
+        "Pour une simple conversation (« ça va ? », « merci »), réponds brièvement sans parler de l'agenda ni des mails.\n"
         "Appelle l'outil tout de suite, sans demander la permission ni annoncer ce que tu vas faire : "
         "l'utilisateur confirme à l'oral avant chaque action. Dans « a », mets l'adresse e-mail si elle est dite, sinon le prénom et le nom tels que dits (« Paul Martin ») ou « moi » : Jarvis retrouve l'adresse dans les mails. N'invente jamais d'adresse.\n"
         "N'affirme jamais avoir fait une action si l'outil ne te l'a pas confirmé. Les brouillons sont dans Gmail, dossier Brouillons ; "
@@ -819,6 +822,7 @@ def run_tool(mic, name, args):
     if name not in FUNCS:
         return f"Erreur : l'outil {name} n'existe pas."
     args = {k: v for k, v in (args or {}).items() if k in ALLOWED_ARGS[name]}
+    consulted.append(name)
     if name in ("mail_envoyer", "brouillon_creer"):  # destinataire introuvable : inutile de demander confirmation
         try:
             _, missing = resolve_all(args.get("a") or [])
@@ -850,7 +854,32 @@ def run_tool(mic, name, args):
     return json.dumps(result, ensure_ascii=False)[:6000]
 
 
-created = []  # créations réellement faites pendant la demande en cours
+created = []   # créations réellement faites pendant la demande en cours
+consulted = []  # outils réellement appelés pendant la demande en cours
+
+# Phrases où le modèle énonce un fait sur l'agenda ou les mails
+FACT = re.compile(r"(rendez-vous|rdv|réunion|événement|agenda|mail|message|courrier)", re.I)
+FACT_DETAIL = re.compile(r"(vous avez|j'ai (vérifié|consulté|regardé|trouvé)|prévu|reçu|aucun|demain|aujourd|"
+                         r"\b\d{1,2} ?h\b|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)", re.I)
+
+
+ACTION_WORDS = re.compile(r"envoi|envoy|écri|ecri|répon|repon|suppr|efface|archiv|marque|ajoute|mets|programme|"
+                          r"déplac|deplac|décal|decal|annul|crée|cree|prépare|prepare", re.I)
+
+
+def fallback_read(text):
+    """Simple question (pas une action) : la lecture évidente, ou None."""
+    if ACTION_WORDS.search(text):
+        return None
+    if re.search(TOOL_GROUPS[1][0], text, re.I):
+        return "mails_chercher", {"requete": "is:unread in:inbox", "nombre": 10}
+    if re.search(TOOL_GROUPS[0][0], text, re.I):
+        return "agenda_lister", {}
+    return None
+
+
+def invented_facts(answer):
+    return not consulted and FACT.search(answer) and FACT_DETAIL.search(answer)
 
 # Phrases où le modèle affirme avoir créé quelque chose
 CLAIM = re.compile(r"(brouillon|événement|evenement|rendez-vous|rdv|mail|message)[^.!?]{0,80}"
@@ -860,7 +889,10 @@ CLAIM = re.compile(r"(brouillon|événement|evenement|rendez-vous|rdv|mail|messa
 
 def guard(answer):
     """Un petit modèle peut prétendre avoir agi sans avoir appelé l'outil : on vérifie."""
-    if CLAIM.search(answer) and not created:
+    # Une phrase négative (« aucun rendez-vous n'est prévu ») n'est pas une affirmation d'action
+    claims = [x for x in re.split(r"(?<=[.!?])\s+", answer)
+              if CLAIM.search(x) and not re.search(r"\b(n'|ne|pas|aucun|aucune|rien|jamais)\b", x, re.I)]
+    if claims and not created:
         log("Garde-fou : le modèle affirmait une création qui n'a pas eu lieu.")
         return ("Pardon, je me suis avancé : je n'ai rien créé. "
                 "Redites-moi précisément ce que vous voulez, et je vous demanderai confirmation avant de le faire.")
@@ -872,6 +904,8 @@ def guard(answer):
 def ask_brain(mic, text):
     global history, last_turn
     created.clear()
+    consulted.clear()
+    nudge = False
     if time.time() - last_turn > 600:  # nouvelle conversation après 10 min
         history = []
     last_turn = time.time()
@@ -883,7 +917,10 @@ def ask_brain(mic, text):
         try:
             resp = client.chat(
                 model=MODEL,
-                messages=[{"role": "system", "content": system_prompt()}] + history[-16:],
+                messages=[{"role": "system", "content": system_prompt()}] + history[-16:]
+                + ([{"role": "system", "content": "Tu n'as consulté aucun outil : ne cite aucun rendez-vous ni aucun mail. "
+                     "Si la question porte sur l'agenda ou les mails, appelle l'outil ; sinon réponds sans en parler."}]
+                   if nudge else []),
                 tools=tools_for(text),
                 think=False,
                 options={"num_ctx": 8192, "temperature": 0.2, "num_predict": 250},
@@ -902,7 +939,35 @@ def ask_brain(mic, text):
         history.append({"role": "assistant", "content": msg.content or "",
                         "tool_calls": [tc.model_dump() for tc in (msg.tool_calls or [])]})
         if not msg.tool_calls:
-            answer = guard((msg.content or "").rsplit("</think>", 1)[-1].strip())
+            raw = (msg.content or "").rsplit("</think>", 1)[-1].strip()
+            # Question sur l'agenda ou les mails mais aucun outil appelé : on insiste une fois,
+            # puis, pour une simple question, Jarvis va lire lui-même et le modèle résume
+            if not consulted and any(re.search(p, text, re.I) for p, _ in TOOL_GROUPS):
+                history.pop()
+                if not nudge:
+                    log("Garde-fou : question sur l'agenda ou les mails sans consultation, je redemande.")
+                    nudge = True
+                    continue
+                read = fallback_read(text)
+                if read:
+                    name, args = read
+                    log(f"Garde-fou : je consulte moi-même ({name}).")
+                    history.append({"role": "assistant", "content": "",
+                                    "tool_calls": [{"function": {"name": name, "arguments": args}}]})
+                    history.append({"role": "tool", "tool_name": name, "content": run_tool(mic, name, args)})
+                    continue
+                history.append({"role": "assistant", "content": raw})
+            if invented_facts(raw):
+                history.pop()
+                if not nudge:  # une seconde chance, avec un rappel ferme
+                    log("Garde-fou : réponse sur l'agenda ou les mails sans les avoir consultés, je redemande.")
+                    nudge = True
+                    continue
+                log("Garde-fou : le modèle inventait encore, réponse neutre.")
+                answer = "Je ne veux rien vous dire d'inexact. Demandez-moi précisément votre agenda ou vos mails, et je les consulte."
+                history.append({"role": "assistant", "content": answer})
+                return answer
+            answer = guard(raw)
             history[-1]["content"] = answer  # l'historique garde la version vérifiée, pas l'invention
             return answer
         for tc in msg.tool_calls:
